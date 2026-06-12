@@ -12,6 +12,12 @@ dist
 dist-ssr
 *.local
 
+# Playwright
+/test-results/
+/playwright-report/
+/blob-report/
+/playwright/.cache/
+
 # Editor directories and files
 .vscode/*
 !.vscode/extensions.json
@@ -22,3 +28,23 @@ dist-ssr
 *.njsproj
 *.sln
 *.sw?
+
+# Env files（不上傳任何 .env；範例檔除外）
+.env
+.env.*
+!.env.example
+
+# Claude Code 本機設定（含個人路徑與 permission 紀錄）
+.claude/settings.local.json
+
+# Build / coverage / 暫存
+coverage/
+build/
+tmp/
+temp/
+.cache/
+*.tmp
+
+# Tauri（src-tauri/.gitignore 已涵蓋，root 再保險一層）
+src-tauri/target/
+src-tauri/gen/
