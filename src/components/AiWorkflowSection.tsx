@@ -1117,10 +1117,12 @@ function CePipelineRunner({
   task,
   aiCommand,
   onPersist,
+  onCreateFollowUpTask,
 }: {
   task: Task;
   aiCommand: string;
   onPersist: (wf: AiEngineeringWorkflow) => void;
+  onCreateFollowUpTask: () => void;
 }) {
   const [status, setStatus] = useState<CePipelineStatus>("idle");
   const [log, setLog] = useState<CePipelineLogItem[]>([]);
@@ -1386,8 +1388,17 @@ function CePipelineRunner({
       </div>
       {showCompletedNotice && (
         <div className="ce-pipeline-completed-notice" data-testid="ce-pipeline-completed-notice">
-          <div className="ce-pipeline-confirm-title">此 Workflow 已完成（Review passed、已 commit、Compound 已記錄）。</div>
-          <div>下一步：保存 AI Workflow、匯出 CE Artifacts；若要重跑，請建立新任務或重設 Workflow。</div>
+          <div className="ce-pipeline-confirm-title">Workflow 已完成（Review passed、已 commit、Compound 已記錄）。</div>
+          <div>若要在同一個專案繼續下一輪，請建立 follow-up 任務，不要重跑這個已完成的 workflow（也保護舊紀錄）。</div>
+          <div className="aiwf-actions">
+            <button
+              className="btn btn-primary"
+              data-testid="ce-pipeline-create-followup"
+              onClick={onCreateFollowUpTask}
+            >
+              Create follow-up task
+            </button>
+          </div>
         </div>
       )}
       {status !== "idle" && (
@@ -1490,7 +1501,16 @@ function CePipelineRunner({
               匯出 CE Artifacts
             </button>
           )}
-          <div className="ce-commit-next">下一步：確認 Compound 內容後可套用完成狀態 / 匯出</div>
+          <div className="ce-commit-next">下一步：在同一專案繼續下一輪，請建立 follow-up 任務（不要重跑已完成的 workflow）。</div>
+          <div className="aiwf-actions">
+            <button
+              className="btn btn-primary"
+              data-testid="ce-pipeline-create-followup"
+              onClick={onCreateFollowUpTask}
+            >
+              Create follow-up task
+            </button>
+          </div>
         </div>
       )}
     </div>
@@ -1510,6 +1530,8 @@ type Props = {
   onApplyCeReviewResult: (result: CeReviewSuccess) => void;
   /** Phase 73B：套用 CE Fix Work 結果（合併 workReview，codeReviewNotes 設為「待 Review」）。 */
   onApplyCeFixWorkResult: (result: CeFixWorkSuccess) => void;
+  /** Phase 82：completed workflow 建立 follow-up 任務（建立後由上層自動選取，原任務不變）。 */
+  onCreateFollowUpTask: () => void;
 };
 
 /**
@@ -1551,7 +1573,7 @@ function AiwfCopyButton({
   );
 }
 
-export function AiWorkflowSection({ task, onSave, aiCommand, onApplyCeReadonlyWorkflow, onApplyCeWorkResult, onApplyCeReviewResult, onApplyCeFixWorkResult }: Props) {
+export function AiWorkflowSection({ task, onSave, aiCommand, onApplyCeReadonlyWorkflow, onApplyCeWorkResult, onApplyCeReviewResult, onApplyCeFixWorkResult, onCreateFollowUpTask }: Props) {
   const [draft, setDraft] = useState<Draft>(() => taskToDraft(task));
   const [saved, setSaved] = useState(false);
   // Phase 74：是否已產生 Compound Notes 草稿（提示使用者仍需保存）。
@@ -1731,6 +1753,7 @@ export function AiWorkflowSection({ task, onSave, aiCommand, onApplyCeReadonlyWo
         task={effectiveTask()}
         aiCommand={aiCommand}
         onPersist={handlePipelinePersist}
+        onCreateFollowUpTask={onCreateFollowUpTask}
       />
 
       {/* Phase 80：Save AI Workflow 主畫面常駐（完成狀態也可手動保存）。 */}

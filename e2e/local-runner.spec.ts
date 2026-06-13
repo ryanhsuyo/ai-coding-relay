@@ -4061,6 +4061,55 @@ test("AI Workflow（Phase 80B）：AI Workflow 被包含在右側工作區內，
   expect(overflowX).toBeLessThanOrEqual(1);
 });
 
+test("CE Pipeline（Phase 82）：completed workflow 顯示 Create follow-up task；建立後自動選取新任務、保留 context、清空 workflow，原任務仍 completed", async ({ page }) => {
+  await mockRunnerRoutes(page, {
+    preflight: PF_PASS,
+    ceReadonlyBody: CE_OK,
+    ceWorkBody: CE_WORK_OK,
+    ceReviewBody: CE_REVIEW_PASSED,
+    ceCommitBody: CE_COMMIT_DONE,
+  });
+  await setupPipelinePage(page, "PHASE82 source task");
+
+  // 未完成時不顯示 follow-up 入口。
+  await expect(page.getByTestId("ce-pipeline-create-followup")).toHaveCount(0);
+
+  // 跑完整一輪到 completed。
+  await page.getByTestId("ce-pipeline-run").click();
+  await page.getByTestId("ce-pipeline-confirm-work").click();
+  await expect(page.getByTestId("ce-pipeline-status")).toHaveAttribute("data-status", "waiting_commit_confirmation");
+  await page.getByTestId("ce-pipeline-confirm-commit").click();
+  await expect(page.getByTestId("ce-pipeline-status")).toHaveAttribute("data-status", "completed");
+
+  // completed 顯示 Create follow-up task。
+  const followBtn = page.getByTestId("ce-pipeline-create-followup");
+  await expect(followBtn).toBeVisible();
+  await followBtn.click();
+
+  // 自動選取新任務：title 有 follow-up 標記、保留 projectPath。
+  await expect(page.locator(".task-detail-title-input")).toHaveValue("Follow-up: PHASE82 source task");
+  await expect(page.getByTestId("aiwf-summary-project")).toHaveText("/Users/ryan/Desktop/code/harness");
+
+  // 新任務 workflow 已清空：未完成、Run CE Pipeline 可按、無 follow-up 按鈕、summary 不帶舊 commit / review / compound。
+  await expect(page.getByTestId("ce-pipeline")).toHaveAttribute("data-completed", "false");
+  await expect(page.getByTestId("ce-pipeline-run")).toBeEnabled();
+  await expect(page.getByTestId("ce-pipeline-create-followup")).toHaveCount(0);
+  await expect(page.getByTestId("aiwf-summary-commit")).toHaveText("—");
+  await expect(page.getByTestId("aiwf-summary-review")).toHaveText("—");
+  await expect(page.getByTestId("aiwf-summary-compound")).toHaveText("—");
+
+  // 列表有兩張卡（原 + follow-up）。
+  await expect(page.locator(".task-card")).toHaveCount(2);
+
+  // 原任務仍 completed：選回原任務卡，Run CE Pipeline disabled、summary 仍帶 commit hash。
+  await page.locator(".task-card").filter({ hasText: "PHASE82 source task" }).filter({ hasNotText: "Follow-up" }).click();
+  await expect(page.locator(".task-detail-title-input")).toHaveValue("PHASE82 source task");
+  await expect(page.getByTestId("ce-pipeline")).toHaveAttribute("data-completed", "true");
+  await expect(page.getByTestId("ce-pipeline-run")).toBeDisabled();
+  await expect(page.getByTestId("aiwf-summary-commit")).toHaveText("f79done");
+  await expect(page.getByTestId("aiwf-summary-review")).toHaveText("passed");
+});
+
 // --- Phase 80：AI Workflow UI cleanup — 主畫面以 Run CE Pipeline 為主，舊手動流程 / 欄位收進折疊區 ---
 
 test("AI Workflow（Phase 80）：主畫面以 Run CE Pipeline 為主；Advanced 與 Workflow details 預設收合", async ({ page }) => {

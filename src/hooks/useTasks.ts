@@ -23,7 +23,7 @@ import { mergeCeReadonlyWorkflow } from "../core/ceReadonlyWorkflow";
 import { mergeCeWorkResult } from "../core/ceWork";
 import { mergeCeReviewResult } from "../core/ceReview";
 import { mergeCeFixWorkResult } from "../core/ceFixWork";
-import { createTask, updateTask } from "../core/taskService";
+import { buildFollowUpTask, createTask, updateTask } from "../core/taskService";
 import { createTaskRound, getNextRoundIndex } from "../core/roundService";
 import { getNowIso } from "../utils/date";
 import { createId } from "../utils/id";
@@ -453,6 +453,25 @@ export function useTasks() {
         return next;
       });
       return copy;
+    },
+    [tasks, persist]
+  );
+
+  // Phase 82：由已完成任務建立 follow-up 任務（保留 context、清空 workflow 結果），不修改來源任務。
+  const createFollowUpTask = useCallback(
+    (taskId: string): Task | null => {
+      const src = tasks.find((t) => t.id === taskId);
+      if (!src) return null;
+      const followUp = buildFollowUpTask(src);
+      setTasks((prev) => {
+        const next = [...prev, followUp];
+        setRounds((prevRounds) => {
+          persist(next, prevRounds);
+          return prevRounds;
+        });
+        return next;
+      });
+      return followUp;
     },
     [tasks, persist]
   );
@@ -927,6 +946,7 @@ export function useTasks() {
     addTask,
     editTask,
     duplicateTask,
+    createFollowUpTask,
     deleteTask,
     archiveTask,
     restoreTask,

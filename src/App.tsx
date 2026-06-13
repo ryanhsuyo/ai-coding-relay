@@ -106,6 +106,12 @@ function App() {
           onApplyCeFixWorkResult={(result) => {
             if (store.selectedTask) store.applyCeFixWorkResult(store.selectedTask.id, result);
           }}
+          onCreateFollowUpTask={() => {
+            // Phase 82：由已完成任務建立 follow-up，建立後自動選取新任務；原任務不變。
+            if (!store.selectedTask) return;
+            const followUp = store.createFollowUpTask(store.selectedTask.id);
+            if (followUp) store.selectTask(followUp.id);
+          }}
           onImportVerification={(jsonText) => {
             if (store.selectedTask) store.importVerificationResult(store.selectedTask.id, jsonText);
           }}

@@ -122,6 +122,8 @@ type Props = {
   onApplyCeReviewResult: (result: CeReviewSuccess) => void;
   /** 套用 CE Fix Work 結果（Phase 73B）：合併 workReview，codeReviewNotes 設為「待 Review」。 */
   onApplyCeFixWorkResult: (result: CeFixWorkSuccess) => void;
+  /** Phase 82：由已完成 workflow 建立 follow-up 任務（建立後由上層自動選取）。 */
+  onCreateFollowUpTask: () => void;
   /** 匯入本機驗證 JSON；格式錯誤時會丟出錯誤，由本元件 alert 顯示。 */
   onImportVerification: (jsonText: string) => void;
   onArchiveTask: () => void;
@@ -135,7 +137,7 @@ type Props = {
   onAutoRunConsumed?: () => void;
 };
 
-export function TaskDetail({ task, rounds, onAddRound, onEditRound, onSetTaskStatus, onSetTaskPriority, onSetDueDate, onSetReviewResult, onSetWorkflowStage, onApplyCompletion, onSaveTitle, onSaveRequirement, onSaveSummary, onSaveTags, onSaveProject, onSaveClaudeResponse, onSaveNextActions, onSaveSpecDraft, onSaveAiWorkflow, onApplyCeReadonlyWorkflow, onApplyCeWorkResult, onApplyCeReviewResult, onApplyCeFixWorkResult, onImportVerification, onArchiveTask, onRestoreTask, onEditTask, onDuplicateTask, onDeleteTask, autoRunOnMount = false, onAutoRunConsumed }: Props) {
+export function TaskDetail({ task, rounds, onAddRound, onEditRound, onSetTaskStatus, onSetTaskPriority, onSetDueDate, onSetReviewResult, onSetWorkflowStage, onApplyCompletion, onSaveTitle, onSaveRequirement, onSaveSummary, onSaveTags, onSaveProject, onSaveClaudeResponse, onSaveNextActions, onSaveSpecDraft, onSaveAiWorkflow, onApplyCeReadonlyWorkflow, onApplyCeWorkResult, onApplyCeReviewResult, onApplyCeFixWorkResult, onCreateFollowUpTask, onImportVerification, onArchiveTask, onRestoreTask, onEditTask, onDuplicateTask, onDeleteTask, autoRunOnMount = false, onAutoRunConsumed }: Props) {
   const [titleDraft, setTitleDraft] = useState(task?.title ?? "");
   // 摘要 textarea 內容提升到 TaskDetail，讓「保存摘要」與「套用完成狀態」共用同一份最新草稿。
   const [summaryDraft, setSummaryDraft] = useState(task?.summary ?? "");
@@ -305,7 +307,7 @@ export function TaskDetail({ task, rounds, onAddRound, onEditRound, onSetTaskSta
       <TagsSection task={task} onSave={onSaveTags} />
 
       <EditableSection label="原始需求" value={task.originalRequirement} taskId={task.id} onSave={onSaveRequirement} />
-      <AiWorkflowSection task={task} onSave={onSaveAiWorkflow} aiCommand={aiCommand} onApplyCeReadonlyWorkflow={onApplyCeReadonlyWorkflow} onApplyCeWorkResult={onApplyCeWorkResult} onApplyCeReviewResult={onApplyCeReviewResult} onApplyCeFixWorkResult={onApplyCeFixWorkResult} />
+      <AiWorkflowSection task={task} onSave={onSaveAiWorkflow} aiCommand={aiCommand} onApplyCeReadonlyWorkflow={onApplyCeReadonlyWorkflow} onApplyCeWorkResult={onApplyCeWorkResult} onApplyCeReviewResult={onApplyCeReviewResult} onApplyCeFixWorkResult={onApplyCeFixWorkResult} onCreateFollowUpTask={onCreateFollowUpTask} />
       <AiCommandSection aiCommand={aiCommand} onChange={setAiCommand} />
       <RunnerStatusSection />
       <PreflightSection preflight={preflight} />
