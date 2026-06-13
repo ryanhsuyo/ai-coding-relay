@@ -126,3 +126,15 @@ AI Coding Relay 是一個**單機任務管理工具**，用來管理「交給 AI
 
 ### 統計
 篩選列下方有一排統計徽章，反映**目前分頁**的數量：全部、待處理、進行中、已完成、逾期、今天、⬆高優、未驗收、通過、需修改。可快速掌握整體狀態。
+
+---
+
+## 7. AI Workflow（CE Pipeline）— 進階自動化入口
+
+任務詳情中的 **AI Workflow** 區塊，是除了第 2 節手動 Relay 之外、較自動化的 CE（Compound Engineering）流程入口。當任務有設定 **Project Path**（且本機有跑 `pnpm runner:local`）時可使用。
+
+- **Pipeline mode 是主要入口**：按 **「Run CE Pipeline」** 會一鍵串接 Readonly → Work → Review → Commit → Compound → Save，只在 **Work 前** 與 **Commit 前** 兩個高風險點停下等你確認；不會自動 push。詳細操作見 `docs/ce-workflow-smoke-test.md` 第 5 節。
+- **Advanced manual controls 是 fallback / debug**：預設收合，內含舊的逐步手動流程（CE Readonly / Work / Review / Fix / Commit checkpoint）。僅在 Pipeline 失敗、Review needs_fix 需手動 Fix、或想單獨重跑某階段時展開使用，不是日常主流程。
+- **Workflow details 是查看 / 編輯細節**：預設收合，展開後可檢視與編輯 Brainstorm / Plan / Audit / Work · Review / Compound 各階段欄位與 Copy Prompt。
+- **Summary panel 是主要狀態摘要**：右側面板顯示進度、下一步、Project Path、Audit checklist、Review 結果、commit hash、changed files 等精簡資訊。
+- **completed workflow 會 disable「Run CE Pipeline」**：已完成（已 commit + Review passed + Compound 已記錄）的任務不能重跑，避免再跑到 `nothing_to_commit`；要重跑請建立新任務。

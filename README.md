@@ -66,6 +66,43 @@ OpenClaw
 
 ---
 
+## CE Pipeline 操作流程（目前主要入口）
+
+AI Workflow 區塊目前以 **Run CE Pipeline** 為主要入口（一鍵串接各階段，只在兩個高風險點停下等人工確認）。日常操作流程：
+
+```txt
+1. 建立任務
+2. 填入 Project Path（目標專案路徑）
+3. 按「Run CE Pipeline」
+   → 自動執行 CE Readonly（Brainstorm / Plan / Audit，唯讀）
+4. 在 Work 前確認（會修改目標專案檔案）→ 按「Confirm Work」
+   → 自動執行 CE Work（實作 + verification），通過後自動執行 CE Review（唯讀）
+5. 在 Commit 前確認（檢視 commit message / changed files / verification 摘要）→ 按「Confirm Commit」
+6. Commit 成功後自動產生 Compound Notes 並自動保存 AI Workflow
+7. 需要時按「Export CE Artifacts」匯出（預設不自動，可勾選「完成後自動匯出」）
+```
+
+重點：
+
+- **兩個人工確認點**：Work 前、Commit 前。其餘步驟自動接續。
+- **不會自動 push**：Pipeline 只做到本機 git commit，從不 push、不動 remote。
+- **Review needs_fix 不會自動修**：Pipeline 會停下並提示，請改用 Advanced manual controls 的 CE Fix Work。
+- **completed workflow 會 disable「Run CE Pipeline」**：已完成（已 commit + Review passed + Compound 已記錄）的任務不能重跑 Pipeline，避免再跑到 commit 階段的 `nothing_to_commit` 錯誤；要重跑請建立新任務。
+
+### Advanced manual controls（fallback / debug，非日常主流程）
+
+主畫面預設收合的「Advanced manual controls」內保留舊的逐步手動流程：手動 CE Readonly Workflow、CE Work、CE Review、CE Fix Work、Commit checkpoint。這些是 **fallback / debug 用途**，例如 Pipeline 中途失敗、Review needs_fix 需手動 Fix、或想單獨重跑某一階段時才展開使用，**不是日常主要流程**。
+
+### Workflow details（查看 / 編輯詳情）
+
+同樣預設收合的「Workflow details」用來查看與編輯各階段的詳細欄位：Brainstorm / Plan / Audit / Work · Review / Compound，以及各階段的 Copy Prompt 與手動 Compound 產生器。
+
+### 右側 Summary panel（主要狀態摘要）
+
+主畫面右側的 Summary panel 是主要狀態摘要區：顯示 AI Workflow 進度、目前狀態、下一步、Project Path、Audit checklist、Review 結果、commit hash、changed files 等精簡資訊（不顯示超長 stdout / 完整 prompt / 完整 review notes）。
+
+---
+
 ## 專案目標
 
 AI Coding Relay 要解決的是 AI coding 過程中的流程管理問題：
