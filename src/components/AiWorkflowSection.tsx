@@ -1705,25 +1705,28 @@ export function AiWorkflowSection({ task, onSave, aiCommand, onApplyCeReadonlyWo
         compound。所有欄位皆可留白。
       </div>
 
-      {/* Phase 79B：desktop 雙欄版面 — 左主流程、右 summary panel（進度總覽）；<1100px fallback 單欄。 */}
+      {/* Phase 80B：垂直堆疊版面 — 上方 progress + summary 一排，下方 CE Pipeline / Save / Advanced / Workflow details 皆 full width；narrow 時 top-row 堆疊單欄。 */}
       <div className="aiwf-layout" data-testid="aiwf-layout">
-        {/* summary panel：DOM 置前，desktop 經 grid 放到右側並 sticky；mobile（單欄）顯示在最上方。 */}
-        <aside className="aiwf-side" data-testid="aiwf-summary-panel">
-          {/* Phase 69：以最新 draft 即時推導階段總覽（只讀取、不保存）。 */}
-          <AiWorkflowProgressPanel task={effectiveTask()} />
-          {/* Phase 80：精簡摘要卡（只顯示狀態與短資訊；不顯示超長 stdout / prompt / review notes）。 */}
-          <div className="aiwf-summary-card" data-testid="aiwf-summary-card">
-            <div className="aiwf-summary-card-title">Summary</div>
-            <div className="aiwf-summary-row"><span className="aiwf-summary-key">Project</span><span className="aiwf-summary-val" data-testid="aiwf-summary-project">{summaryProjectPath}</span></div>
-            <div className="aiwf-summary-row"><span className="aiwf-summary-key">Review</span><span className="aiwf-summary-val" data-testid="aiwf-summary-review">{summaryReview}</span></div>
-            <div className="aiwf-summary-row"><span className="aiwf-summary-key">Commit</span><span className="aiwf-summary-val" data-testid="aiwf-summary-commit">{summaryCommit}</span></div>
-            <div className="aiwf-summary-row"><span className="aiwf-summary-key">Changed files</span><span className="aiwf-summary-val" data-testid="aiwf-summary-changed">{summaryChanged}</span></div>
-            <div className="aiwf-summary-row"><span className="aiwf-summary-key">Compound</span><span className="aiwf-summary-val" data-testid="aiwf-summary-compound">{summaryCompound}</span></div>
+        {/* 上方一排：左 progress（較寬）、右 summary（較窄）；不 sticky、不浮出容器。 */}
+        <div className="aiwf-top-row">
+          <div className="aiwf-progress-col">
+            {/* Phase 69：以最新 draft 即時推導階段總覽（只讀取、不保存）。 */}
+            <AiWorkflowProgressPanel task={effectiveTask()} />
           </div>
-        </aside>
+          {/* Phase 80：精簡摘要卡（只顯示狀態與短資訊；不顯示超長 stdout / prompt / review notes）。 */}
+          <aside className="aiwf-side" data-testid="aiwf-summary-panel">
+            <div className="aiwf-summary-card" data-testid="aiwf-summary-card">
+              <div className="aiwf-summary-card-title">Summary</div>
+              <div className="aiwf-summary-row"><span className="aiwf-summary-key">Project</span><span className="aiwf-summary-val" data-testid="aiwf-summary-project">{summaryProjectPath}</span></div>
+              <div className="aiwf-summary-row"><span className="aiwf-summary-key">Review</span><span className="aiwf-summary-val" data-testid="aiwf-summary-review">{summaryReview}</span></div>
+              <div className="aiwf-summary-row"><span className="aiwf-summary-key">Commit</span><span className="aiwf-summary-val" data-testid="aiwf-summary-commit">{summaryCommit}</span></div>
+              <div className="aiwf-summary-row"><span className="aiwf-summary-key">Changed files</span><span className="aiwf-summary-val" data-testid="aiwf-summary-changed">{summaryChanged}</span></div>
+              <div className="aiwf-summary-row"><span className="aiwf-summary-key">Compound</span><span className="aiwf-summary-val" data-testid="aiwf-summary-compound">{summaryCompound}</span></div>
+            </div>
+          </aside>
+        </div>
 
-        <div className="aiwf-main">
-      {/* Phase 78：一鍵 CE Pipeline（自動串接各階段，Work 前 / Commit 前停下等人工確認；不 push）。 */}
+      {/* Phase 78：一鍵 CE Pipeline（full width，緊接在 progress / summary 下方；Work 前 / Commit 前停下等人工確認；不 push）。 */}
       <CePipelineRunner
         task={effectiveTask()}
         aiCommand={aiCommand}
@@ -2096,7 +2099,6 @@ export function AiWorkflowSection({ task, onSave, aiCommand, onApplyCeReadonlyWo
       </details>
         </div>
       </details>
-        </div>{/* .aiwf-main */}
       </div>{/* .aiwf-layout */}
     </div>
   );

@@ -28,6 +28,9 @@ html, body, #root {
 
 .app-main {
   flex: 1;
+  /* Phase 80B：flex 子項預設 min-width:auto 會被內容撐開、可能擠壞左側 sidebar；
+     設 min-width:0 讓右側工作區能正確收縮並吃滿剩餘寬度，內容不外溢。 */
+  min-width: 0;
   overflow-y: auto;
   background: #fff;
 }
@@ -294,21 +297,24 @@ html, body, #root {
 }
 
 /* ── Task Detail ── */
+/* Phase 80B：detail 工作區吃滿右側剩餘寬度（不再用 1240px 上限造成 AI Workflow 凸出感）。
+   wrapper 本身 full width；一般表單欄位由下方規則維持可讀寬度，AI Workflow 則 full width 但被包含在工作區內。 */
 .task-detail-wrap {
   padding: 28px 32px;
-  /* Phase 79B：放寬整個 detail 面板，讓 AI Workflow 能在 desktop 使用右側空間。
-     一般區塊仍由下方規則維持在可讀寬度，只有 AI Workflow opt-in wide mode。 */
-  max-width: 1240px;
+  max-width: none;
+  box-sizing: border-box;
 }
 
-/* Phase 79B：一般表單 / 文字區塊維持原本可讀寬度（不被新的寬版面拉長到不可讀）。 */
+/* Phase 79B/80B：一般表單 / 文字區塊維持可讀寬度（不被寬版面拉長到不可讀），左對齊。 */
 .task-detail-wrap > * {
-  max-width: 760px;
+  max-width: 820px;
 }
 
-/* Phase 79B：AI Workflow 區塊 opt-in wide mode，使用整個面板寬度（覆蓋上面的 760px 上限）。 */
+/* Phase 80B：AI Workflow 區塊使用整個工作區寬度（覆蓋上面的上限），但仍被 wrapper padding 包含、不溢出。 */
 .task-detail-wrap > .ai-workflow-section {
   max-width: none;
+  width: 100%;
+  box-sizing: border-box;
 }
 
 .task-detail-empty {
@@ -545,32 +551,37 @@ html, body, #root {
   padding: 14px 16px;
 }
 
-/* Phase 79B：AI Workflow 雙欄版面。預設（窄螢幕 / mobile）單欄，summary panel 在最上方。 */
+/* Phase 80B：AI Workflow 垂直堆疊版面。
+   .aiwf-layout 是 full-width 縱向 flex；只有上方 .aiwf-top-row 是雙欄（progress + summary），
+   其餘（CE Pipeline / Save / Advanced / Workflow details）皆 full width，緊接在 top-row 下方，
+   不再讓主流程掉到很下面、也不留大片空白。 */
 .aiwf-layout {
   display: flex;
   flex-direction: column;
-  gap: 14px;
-}
-
-.aiwf-main {
+  gap: 12px;
   min-width: 0;
 }
 
-/* desktop（≥1100px）：左主流程（彈性）＋右 summary panel（280–360px，sticky）。 */
-@media (min-width: 1100px) {
-  .aiwf-layout {
+/* 上方一排：預設（窄 / mobile）單欄堆疊（progress 在上、summary 在下）。 */
+.aiwf-top-row {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  min-width: 0;
+}
+
+.aiwf-top-row > .aiwf-progress-col,
+.aiwf-top-row > .aiwf-side {
+  min-width: 0;
+}
+
+/* desktop（≥1000px）：progress（較寬 ~62%）＋ summary（較窄，280–360px）一排；不 sticky、不浮出容器。 */
+@media (min-width: 1000px) {
+  .aiwf-top-row {
     display: grid;
-    grid-template-columns: minmax(0, 1fr) minmax(280px, 360px);
+    grid-template-columns: minmax(0, 1.6fr) minmax(280px, 360px);
     align-items: start;
     gap: 16px;
-  }
-  .aiwf-main {
-    grid-column: 1;
-  }
-  .aiwf-side {
-    grid-column: 2;
-    position: sticky;
-    top: 12px;
   }
 }
 
@@ -1152,7 +1163,7 @@ html, body, #root {
 
 /* Phase 80：右側 summary panel 的精簡摘要卡（只顯示狀態與短資訊）。 */
 .aiwf-summary-card {
-  margin-top: 10px;
+  /* Phase 80B：summary 卡現在是 top-row 右欄的唯一內容，與左側 progress 卡頂端對齊（不再 margin-top）。 */
   border: 1px solid #ece4fb;
   border-radius: 8px;
   background: #fff;

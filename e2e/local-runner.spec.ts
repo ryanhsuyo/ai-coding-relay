@@ -3993,40 +3993,72 @@ test("AI Workflow（Phase 79B）：desktop 雙欄版面 — wide layout wrapper 
   await mockRunnerRoutes(page, { preflight: PF_PASS, ceReadonlyBody: CE_OK });
   await setupPipelinePage(page, "PHASE79B layout");
 
-  // 雙欄 wrapper 與 summary panel 存在且可見。
+  // layout wrapper、progress、summary panel 皆存在且可見。
   const layout = page.getByTestId("aiwf-layout");
   await expect(layout).toBeVisible();
+  const progress = page.getByTestId("aiwf-progress");
   const sidePanel = page.getByTestId("aiwf-summary-panel");
+  await expect(progress).toBeVisible();
   await expect(sidePanel).toBeVisible();
-  // summary panel 內含進度總覽。
-  await expect(sidePanel.getByTestId("aiwf-progress")).toBeVisible();
 
-  // desktop（viewport ≥1100）summary panel 應在主流程右側（grid 第二欄）。
+  // Phase 80B desktop（viewport ≥1000）：progress 與 summary 在同一排（頂端對齊，summary 在右），
+  // CE Pipeline 在這一排「下方」full width（不掉到很下面、不在右欄）。
+  const progressBox = await progress.boundingBox();
   const sideBox = await sidePanel.boundingBox();
   const pipelineBox = await page.getByTestId("ce-pipeline").boundingBox();
+  expect(progressBox, "progress 應有版面位置").not.toBeNull();
   expect(sideBox, "summary panel 應有版面位置").not.toBeNull();
   expect(pipelineBox, "pipeline 卡片應有版面位置").not.toBeNull();
-  if (sideBox && pipelineBox) {
-    // summary panel 左緣明顯比 pipeline 卡片右側更靠右（即在右欄，不是擠在左邊）。
-    expect(sideBox.x).toBeGreaterThan(pipelineBox.x + 200);
+  if (progressBox && sideBox && pipelineBox) {
+    // 同一排：頂端大致對齊。
+    expect(Math.abs(progressBox.y - sideBox.y)).toBeLessThan(40);
+    // summary 在 progress 右側。
+    expect(sideBox.x).toBeGreaterThan(progressBox.x + 200);
+    // CE Pipeline 在 top-row 下方（y 大於 summary 的頂端），且 full width（左緣貼齊 progress 左緣）。
+    expect(pipelineBox.y).toBeGreaterThan(sideBox.y);
+    expect(Math.abs(pipelineBox.x - progressBox.x)).toBeLessThan(20);
   }
 });
 
-test("AI Workflow（Phase 79B）：narrow viewport（<1100）fallback 單欄，summary panel 仍存在於上方", async ({ page }) => {
+test("AI Workflow（Phase 80B）：narrow viewport（<1000）fallback 單欄，progress / summary / pipeline 由上而下堆疊", async ({ page }) => {
   await page.setViewportSize({ width: 900, height: 800 });
   await mockRunnerRoutes(page, { preflight: PF_PASS, ceReadonlyBody: CE_OK });
-  await setupPipelinePage(page, "PHASE79B narrow layout");
+  await setupPipelinePage(page, "PHASE80B narrow layout");
 
+  const progress = page.getByTestId("aiwf-progress");
   const sidePanel = page.getByTestId("aiwf-summary-panel");
+  await expect(progress).toBeVisible();
   await expect(sidePanel).toBeVisible();
+  const progressBox = await progress.boundingBox();
   const sideBox = await sidePanel.boundingBox();
   const pipelineBox = await page.getByTestId("ce-pipeline").boundingBox();
-  // 單欄：summary panel 與 pipeline 卡片左緣大致對齊（非並排）。
-  if (sideBox && pipelineBox) {
+  // 單欄堆疊：三者左緣大致對齊（非並排），且順序為 progress → summary → pipeline 由上而下。
+  if (progressBox && sideBox && pipelineBox) {
     expect(Math.abs(sideBox.x - pipelineBox.x)).toBeLessThan(40);
-    // summary panel 在 pipeline 卡片上方。
+    expect(Math.abs(progressBox.x - pipelineBox.x)).toBeLessThan(40);
+    expect(progressBox.y).toBeLessThan(sideBox.y);
     expect(sideBox.y).toBeLessThan(pipelineBox.y);
   }
+});
+
+test("AI Workflow（Phase 80B）：AI Workflow 被包含在右側工作區內，不凸出 / 不水平溢出", async ({ page }) => {
+  await mockRunnerRoutes(page, { preflight: PF_PASS, ceReadonlyBody: CE_OK });
+  await setupPipelinePage(page, "PHASE80B containment");
+
+  const aiBox = await page.getByTestId("ai-workflow").boundingBox();
+  const mainBox = await page.locator(".app-main").boundingBox();
+  expect(aiBox, "AI Workflow 應有版面位置").not.toBeNull();
+  expect(mainBox, "右側工作區應有版面位置").not.toBeNull();
+  if (aiBox && mainBox) {
+    // AI Workflow 左右邊界都被包含在右側工作區（.app-main）內（允許 1px 捨入誤差）。
+    expect(aiBox.x).toBeGreaterThanOrEqual(mainBox.x - 1);
+    expect(aiBox.x + aiBox.width).toBeLessThanOrEqual(mainBox.x + mainBox.width + 1);
+  }
+  // 不產生水平捲動（內容沒有撐破視窗寬度）。
+  const overflowX = await page.evaluate(
+    () => document.documentElement.scrollWidth - document.documentElement.clientWidth
+  );
+  expect(overflowX).toBeLessThanOrEqual(1);
 });
 
 // --- Phase 80：AI Workflow UI cleanup — 主畫面以 Run CE Pipeline 為主，舊手動流程 / 欄位收進折疊區 ---
