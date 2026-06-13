@@ -296,7 +296,19 @@ html, body, #root {
 /* ── Task Detail ── */
 .task-detail-wrap {
   padding: 28px 32px;
-  max-width: 720px;
+  /* Phase 79B：放寬整個 detail 面板，讓 AI Workflow 能在 desktop 使用右側空間。
+     一般區塊仍由下方規則維持在可讀寬度，只有 AI Workflow opt-in wide mode。 */
+  max-width: 1240px;
+}
+
+/* Phase 79B：一般表單 / 文字區塊維持原本可讀寬度（不被新的寬版面拉長到不可讀）。 */
+.task-detail-wrap > * {
+  max-width: 760px;
+}
+
+/* Phase 79B：AI Workflow 區塊 opt-in wide mode，使用整個面板寬度（覆蓋上面的 760px 上限）。 */
+.task-detail-wrap > .ai-workflow-section {
+  max-width: none;
 }
 
 .task-detail-empty {
@@ -533,6 +545,35 @@ html, body, #root {
   padding: 14px 16px;
 }
 
+/* Phase 79B：AI Workflow 雙欄版面。預設（窄螢幕 / mobile）單欄，summary panel 在最上方。 */
+.aiwf-layout {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+
+.aiwf-main {
+  min-width: 0;
+}
+
+/* desktop（≥1100px）：左主流程（彈性）＋右 summary panel（280–360px，sticky）。 */
+@media (min-width: 1100px) {
+  .aiwf-layout {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) minmax(280px, 360px);
+    align-items: start;
+    gap: 16px;
+  }
+  .aiwf-main {
+    grid-column: 1;
+  }
+  .aiwf-side {
+    grid-column: 2;
+    position: sticky;
+    top: 12px;
+  }
+}
+
 /* ── AI Workflow 進度總覽（Phase 69） ── */
 .aiwf-progress-panel {
   border: 1px solid #ece4fb;
@@ -760,6 +801,128 @@ html, body, #root {
   overflow: auto;
 }
 
+/* Phase 78：一鍵 CE Pipeline（自動串接各階段，Work 前 / Commit 前等人工確認；不 push）。 */
+.ce-pipeline {
+  margin: 10px 0;
+  padding: 10px;
+  border: 1px solid #d9d2ec;
+  border-radius: 8px;
+  background: #faf9fe;
+}
+
+.ce-pipeline-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  margin-bottom: 6px;
+}
+
+.ce-pipeline-title {
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.ce-pipeline-auto-export {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 11px;
+  color: #555;
+}
+
+.ce-pipeline-status {
+  margin-top: 6px;
+  font-size: 12px;
+  color: #4a3f6b;
+}
+
+.ce-pipeline-status.ce-pipeline-failed { color: #a33a3a; }
+.ce-pipeline-status.ce-pipeline-needs_fix { color: #8a6d3b; }
+.ce-pipeline-status.ce-pipeline-completed { color: #2f5d35; }
+.ce-pipeline-status.ce-pipeline-cancelled { color: #6b7280; }
+
+.ce-pipeline-log {
+  margin: 6px 0 0;
+  padding-left: 18px;
+  font-size: 11px;
+  color: #555;
+  list-style: none;
+}
+
+.ce-pipeline-confirm {
+  margin-top: 8px;
+  padding: 8px;
+  border: 1px solid #e8d9a8;
+  border-radius: 6px;
+  background: #fdf9ec;
+  font-size: 12px;
+}
+
+.ce-pipeline-confirm-title {
+  font-weight: 600;
+  margin-bottom: 4px;
+}
+
+.ce-pipeline-confirm-row {
+  margin-top: 2px;
+}
+
+.ce-pipeline-confirm-list {
+  margin: 4px 0 0;
+  padding-left: 18px;
+  font-size: 11px;
+}
+
+.ce-pipeline-pre {
+  margin: 6px 0 0;
+  padding: 6px 8px;
+  font-size: 11px;
+  background: #f6f4fb;
+  border: 1px solid #e5e0f0;
+  border-radius: 6px;
+  white-space: pre-wrap;
+  word-break: break-all;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  max-height: 160px;
+  overflow: auto;
+}
+
+.ce-pipeline-warning {
+  margin-top: 6px;
+  font-size: 11px;
+  color: #8a6d3b;
+}
+
+.ce-pipeline-needs-fix {
+  margin-top: 8px;
+  font-size: 12px;
+  color: #8a6d3b;
+}
+
+.ce-pipeline-error {
+  margin-top: 8px;
+  font-size: 12px;
+  color: #a33a3a;
+}
+
+.ce-pipeline-completed {
+  margin-top: 8px;
+  font-size: 12px;
+  color: #2f5d35;
+}
+
+/* Phase 79B：已完成 workflow 時的提示（Run 已 disabled，引導下一步，避免誤跑到 nothing_to_commit）。 */
+.ce-pipeline-completed-notice {
+  margin-top: 8px;
+  padding: 8px;
+  border: 1px solid #bfe3c5;
+  border-radius: 6px;
+  background: #f0f9f1;
+  font-size: 12px;
+  color: #2f5d35;
+}
+
 /* Phase 77F：CE Commit checkpoint（Review passed 後出現；確認才 commit；不 push）。 */
 .ce-commit-checkpoint {
   margin: 10px 0;
@@ -950,6 +1113,77 @@ html, body, #root {
   font-size: 11px;
   color: #6b7280;
   margin-bottom: 8px;
+}
+
+/* Phase 80：可收合的區段群組（Advanced manual controls / Workflow details），預設收合。 */
+.aiwf-section-group {
+  margin-top: 12px;
+  border: 1px solid #e5e0f0;
+  border-radius: 8px;
+  background: #fff;
+}
+
+.aiwf-section-group-summary {
+  cursor: pointer;
+  font-size: 12px;
+  font-weight: 700;
+  color: #4a3f6b;
+  padding: 10px 12px;
+  user-select: none;
+  list-style: none;
+}
+
+.aiwf-section-group-summary::-webkit-details-marker {
+  display: none;
+}
+
+.aiwf-section-group-summary::before {
+  content: "▸ ";
+  color: #9b8cc4;
+}
+
+.aiwf-section-group[open] > .aiwf-section-group-summary::before {
+  content: "▾ ";
+}
+
+.aiwf-section-group-body {
+  padding: 0 12px 10px;
+}
+
+/* Phase 80：右側 summary panel 的精簡摘要卡（只顯示狀態與短資訊）。 */
+.aiwf-summary-card {
+  margin-top: 10px;
+  border: 1px solid #ece4fb;
+  border-radius: 8px;
+  background: #fff;
+  padding: 10px 12px;
+}
+
+.aiwf-summary-card-title {
+  font-size: 11px;
+  font-weight: 700;
+  color: #5b21b6;
+  margin-bottom: 6px;
+}
+
+.aiwf-summary-row {
+  display: flex;
+  justify-content: space-between;
+  gap: 10px;
+  font-size: 12px;
+  padding: 2px 0;
+}
+
+.aiwf-summary-key {
+  color: #6b7280;
+  flex: 0 0 auto;
+}
+
+.aiwf-summary-val {
+  color: #333;
+  text-align: right;
+  word-break: break-all;
+  overflow-wrap: anywhere;
 }
 
 .aiwf-details {

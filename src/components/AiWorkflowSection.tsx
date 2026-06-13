@@ -1,4 +1,4 @@
-import { useState, useEffect } from "react";
+import { useState, useEffect, useRef } from "react";
 import type {
   AiEngineeringWorkflow,
   AiWorkflowWorkReview,
@@ -19,11 +19,23 @@ import {
   buildReviewPrompt,
   buildWorkPrompt,
 } from "../core/aiWorkflowPrompts";
-import { parseCeReadonlyWorkflowResult } from "../core/ceReadonlyWorkflow";
+import { mergeCeReadonlyWorkflow, parseCeReadonlyWorkflowResult } from "../core/ceReadonlyWorkflow";
+import {
+  CE_PIPELINE_STATUS_TEXT,
+  buildCommitConfirmationSummary,
+  buildWorkConfirmationSummary,
+  findUnrelatedChanges,
+  isCeWorkflowCompleted,
+  isPipelineActive,
+  isPipelineAutoStep,
+  type CeCommitConfirmationSummary,
+  type CePipelineStatus,
+  type CeWorkConfirmationSummary,
+} from "../core/cePipeline";
 import { evaluateCeWorkGate, mergeCeWorkResult, parseCeWorkResult } from "../core/ceWork";
 import { evaluateCeReviewGate, mergeCeReviewResult, parseCeReviewResult } from "../core/ceReview";
 import { evaluateCeFixWorkGate, mergeCeFixWorkResult, parseCeFixWorkResult } from "../core/ceFixWork";
-import { isCeReviewNeedsFix, isTaskFullyCompleted } from "../core/ceCompletion";
+import { isCeReviewNeedsFix, isCeReviewPassed, isTaskFullyCompleted } from "../core/ceCompletion";
 import {
   generateCeCommitMessage,
   mergeCeCommitCheckpointResult,
@@ -176,6 +188,21 @@ function applyWorkReviewToDraft(prev: Draft, workReview: AiWorkflowWorkReview | 
     commitMessage: workReview?.commitMessage ?? "",
     committedAt: workReview?.committedAt ?? "",
     committedFiles: arrayToLines(workReview?.committedFiles),
+  };
+}
+
+/**
+ * Phase 78：把「完整 workflow」套進編輯草稿（CE Pipeline 持久化時同步 UI 用）。
+ * 覆寫 brainstorm / plan / audit / workReview / compound 全部對應欄位；
+ * wf 來自 pipeline 逐步合併的結果（起點即 draft 轉出的 workflow），不會遺失使用者輸入。
+ */
+function applyFullWorkflowToDraft(prev: Draft, wf: AiEngineeringWorkflow): Draft {
+  const base = applyWorkReviewToDraft(applyWorkflowToDraft(prev, wf), wf.workReview);
+  return {
+    ...base,
+    reusablePrompt: wf.compound?.reusablePrompt ?? "",
+    lessonLearned: wf.compound?.lessonLearned ?? "",
+    compoundNotes: wf.compound?.compoundNotes ?? "",
   };
 }
 
@@ -1072,6 +1099,404 @@ function CeArtifactExportRunner({ task }: { task: Task }) {
   );
 }
 
+/** Phase 78：pipeline 步驟結果紀錄（顯示用）。 */
+type CePipelineLogItem = { step: string; ok: boolean; detail: string };
+
+/**
+ * Phase 78：一鍵 CE Pipeline。
+ * 自動串接既有 endpoint（/ce-readonly-workflow → /ce-work → /ce-review → /ce-commit-checkpoint →
+ * compound → 保存 →（可選）/export-ce-artifacts），但在兩個高風險點停下等人工確認：
+ *   1. Work 前（會修改目標專案檔案）。
+ *   2. Commit 前（會建立 git commit）。
+ * 安全規則：Readonly / Work / Review / Commit 任一失敗即停止；Review needs_fix 停止且不自動修
+ * （由下方既有 CE Fix Work 區塊接手）；verification failed 由 runner 端擋下不 commit；
+ * Cancel 後不再自動執行任何後續步驟；全程不 push。
+ * workflow 物件在本元件內逐步合併（與各 store merge 相同的 core 函式），每步成功即 onPersist 持久化。
+ */
+function CePipelineRunner({
+  task,
+  aiCommand,
+  onPersist,
+}: {
+  task: Task;
+  aiCommand: string;
+  onPersist: (wf: AiEngineeringWorkflow) => void;
+}) {
+  const [status, setStatus] = useState<CePipelineStatus>("idle");
+  const [log, setLog] = useState<CePipelineLogItem[]>([]);
+  const [error, setError] = useState("");
+  const [errorPreview, setErrorPreview] = useState("");
+  const [workSummary, setWorkSummary] = useState<CeWorkConfirmationSummary | null>(null);
+  const [commitSummary, setCommitSummary] = useState<CeCommitConfirmationSummary | null>(null);
+  const [commitMessage, setCommitMessage] = useState("");
+  const [commitHash, setCommitHash] = useState("");
+  const [recommendedFixes, setRecommendedFixes] = useState<string[]>([]);
+  const [unrelatedChanges, setUnrelatedChanges] = useState<string[]>([]);
+  const [compoundDone, setCompoundDone] = useState(false);
+  const [exportedDir, setExportedDir] = useState("");
+  // Artifact export 預設不自動（避免 target project 多出 artifact 檔案）。
+  const [autoExport, setAutoExport] = useState(false);
+  // 等待確認期間的累積 workflow（含前面步驟回填結果），供下一步 request 使用。
+  const pendingWfRef = useRef<AiEngineeringWorkflow | undefined>(undefined);
+  // Cancel 旗標：每個 await 之後檢查；取消後不再執行任何後續步驟。
+  const cancelledRef = useRef(false);
+
+  // 切換任務時重置（pipeline 狀態只存在 runtime，不持久化；每步結果已寫入 aiWorkflow）。
+  useEffect(() => {
+    cancelledRef.current = false;
+    setStatus("idle");
+    setLog([]);
+    setError("");
+    setErrorPreview("");
+    setWorkSummary(null);
+    setCommitSummary(null);
+    setCommitMessage("");
+    setCommitHash("");
+    setRecommendedFixes([]);
+    setUnrelatedChanges([]);
+    setCompoundDone(false);
+    setExportedDir("");
+  }, [task.id]);
+
+  function addLog(step: string, ok: boolean, detail: string) {
+    setLog((prev) => [...prev, { step, ok, detail }]);
+  }
+
+  function fail(step: string, stoppedReason: string, message: string, preview?: string) {
+    setStatus("failed");
+    setError(`${step} 失敗（${stoppedReason}）：${message}`);
+    setErrorPreview(preview?.trim() ?? "");
+    addLog(step, false, stoppedReason);
+  }
+
+  /** POST JSON 到 local runner；連線失敗丟例外（由呼叫端統一轉為 failed）。 */
+  async function postJson(url: string, body: unknown): Promise<unknown> {
+    const res = await fetch(url, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body),
+    });
+    return res.json().catch(() => null);
+  }
+
+  function connectionError(e: unknown): string {
+    return `無法連線到 local runner（${e instanceof Error ? e.message : "未知錯誤"}）。請先在 ai-coding-relay 專案根目錄執行：pnpm runner:local`;
+  }
+
+  /** 1–4：自動 Readonly → gate 檢查 → 等待 Work 確認。 */
+  async function startPipeline() {
+    cancelledRef.current = false;
+    setStatus("running_readonly");
+    setLog([]);
+    setError("");
+    setErrorPreview("");
+    setWorkSummary(null);
+    setCommitSummary(null);
+    setCommitHash("");
+    setRecommendedFixes([]);
+    setUnrelatedChanges([]);
+    setCompoundDone(false);
+    setExportedDir("");
+
+    const wf0 = task.aiWorkflow;
+    try {
+      const raw = await postJson(CE_READONLY_WORKFLOW_URL, { task: { ...task, aiWorkflow: wf0 }, aiCommand });
+      if (cancelledRef.current) return;
+      const result = parseCeReadonlyWorkflowResult(raw);
+      if (!result.ok) {
+        fail("Readonly", result.stoppedReason, result.message, result.rawOutputPreview ?? result.stdoutPreview);
+        return;
+      }
+      const wf1 = mergeCeReadonlyWorkflow(wf0, result.workflow);
+      onPersist(wf1);
+      addLog("Readonly", true, "Brainstorm / Plan / Audit 已回填");
+
+      // Work gate：Audit 必須通過且 canStartWork=true 才停在確認區，否則直接停止。
+      const gate = evaluateCeWorkGate({ ...task, aiWorkflow: wf1 });
+      if (!result.canStartWork || !gate.canWork) {
+        fail("Work gate", "work_gate_failed", gate.reason || "Audit 未達可進入 Work 的標準（canStartWork=false）。");
+        return;
+      }
+      pendingWfRef.current = wf1;
+      setWorkSummary(buildWorkConfirmationSummary(wf1));
+      setStatus("waiting_work_confirmation");
+    } catch (e) {
+      if (cancelledRef.current) return;
+      fail("Readonly", "runner_error", connectionError(e));
+    }
+  }
+
+  /** 5–9：使用者確認後自動 Work → Review；passed 則產生 commit message 等待 Commit 確認。 */
+  async function confirmWork() {
+    const wf1 = pendingWfRef.current;
+    if (!wf1 || status !== "waiting_work_confirmation") return;
+    setStatus("running_work");
+    try {
+      const raw = await postJson(CE_WORK_URL, { task: { ...task, aiWorkflow: wf1 }, aiCommand });
+      if (cancelledRef.current) return;
+      const workResult = parseCeWorkResult(raw);
+      if (!workResult.ok) {
+        fail("Work", workResult.stoppedReason, workResult.message, workResult.rawOutputPreview ?? workResult.stdoutPreview);
+        return;
+      }
+      const wf2 = mergeCeWorkResult(wf1, workResult);
+      onPersist(wf2);
+      addLog("Work", true, `已記錄 ${workResult.work.changedFiles.length} 個修改檔案，verification ${workResult.verification.ok ? "通過" : "未通過"}`);
+
+      // 自動 Review（唯讀）。
+      setStatus("running_review");
+      const reviewRaw = await postJson(CE_REVIEW_URL, { task: { ...task, aiWorkflow: wf2 }, aiCommand });
+      if (cancelledRef.current) return;
+      const reviewResult = parseCeReviewResult(reviewRaw);
+      if (!reviewResult.ok) {
+        fail("Review", reviewResult.stoppedReason, reviewResult.message, reviewResult.stdoutPreview);
+        return;
+      }
+      const wf3 = mergeCeReviewResult(wf2, reviewResult);
+      onPersist(wf3);
+
+      if (reviewResult.review.result === "needs_fix") {
+        // 安全規則：不自動修；停止並顯示 recommended fixes，交給下方既有 CE Fix Work 流程。
+        setRecommendedFixes(reviewResult.review.recommendedFixes);
+        addLog("Review", false, "needs_fix");
+        setStatus("needs_fix");
+        return;
+      }
+      addLog("Review", true, "passed");
+
+      // 產生建議 commit message 並停在 Commit 確認區。
+      setCommitMessage(generateCeCommitMessage({ ...task, aiWorkflow: wf3 }));
+      setCommitSummary(buildCommitConfirmationSummary(workResult));
+      setUnrelatedChanges(findUnrelatedChanges(workResult.git.statusShort, workResult.work.changedFiles));
+      pendingWfRef.current = wf3;
+      setStatus("waiting_commit_confirmation");
+    } catch (e) {
+      if (cancelledRef.current) return;
+      fail("Work", "runner_error", connectionError(e));
+    }
+  }
+
+  /** 10–12：使用者確認後 commit → 自動 Compound →自動保存 →（可選）自動匯出。 */
+  async function confirmCommit() {
+    const wf3 = pendingWfRef.current;
+    if (!wf3 || status !== "waiting_commit_confirmation") return;
+    setStatus("committing");
+    try {
+      const raw = await postJson(CE_COMMIT_URL, {
+        projectPath: task.projectPath ?? "",
+        commitMessage,
+        changedFiles: wf3.workReview?.changedFiles ?? [],
+      });
+      if (cancelledRef.current) return;
+      const result = parseCeCommitCheckpointResult(raw);
+      if (!result.ok) {
+        // commit 失敗（含 verification_failed / nothing_to_commit）不得標記 completed。
+        fail("Commit", result.stoppedReason, result.message, result.verificationPreview ?? result.stderrPreview);
+        return;
+      }
+      let wf4 = mergeCeCommitCheckpointResult(wf3, result);
+      setCommitHash(result.commitHash);
+      addLog("Commit", true, `commit ${result.commitHash}`);
+
+      // 自動產生 Compound Notes（純函式，不呼叫 runner）。
+      setStatus("generating_compound");
+      const compound = buildCeCompoundDraft({ ...task, aiWorkflow: wf4 });
+      wf4 = { ...wf4, compound };
+      setCompoundDone(true);
+      addLog("Compound", true, "已產生 Compound Notes");
+
+      // 自動保存 AI Workflow。
+      setStatus("saving_workflow");
+      onPersist(wf4);
+      pendingWfRef.current = wf4;
+      addLog("Save", true, "AI Workflow 已保存");
+
+      if (autoExport) {
+        await runExport(wf4);
+      } else {
+        setStatus("completed");
+      }
+    } catch (e) {
+      if (cancelledRef.current) return;
+      fail("Commit", "runner_error", connectionError(e));
+    }
+  }
+
+  /** Artifact export（自動勾選時於 commit 後執行；否則由 completed 區的按鈕手動觸發）。 */
+  async function runExport(wf: AiEngineeringWorkflow) {
+    setStatus("exporting_artifacts");
+    try {
+      const raw = await postJson(CE_EXPORT_URL, { task: { ...task, aiWorkflow: wf } });
+      if (cancelledRef.current) return;
+      const result = parseCeArtifactExportResult(raw);
+      if (!result.ok) {
+        fail("Export", result.stoppedReason, result.message);
+        return;
+      }
+      setExportedDir(result.artifact.relativeDir);
+      addLog("Export", true, result.artifact.relativeDir);
+      setStatus("completed");
+    } catch (e) {
+      if (cancelledRef.current) return;
+      fail("Export", "runner_error", connectionError(e));
+    }
+  }
+
+  function handleCancel() {
+    cancelledRef.current = true;
+    setStatus("cancelled");
+  }
+
+  // Phase 79B：整個 workflow 已完成（commit + review passed + compound）時，
+  // 不讓使用者誤按 Run CE Pipeline 再跑一次（會跑到 commit 階段的 nothing_to_commit）。
+  const workflowCompleted = isCeWorkflowCompleted(task.aiWorkflow);
+  // 開啟「已完成」任務時（status 仍為 idle）顯示完成提示與下一步；剛跑完一輪（status==="completed"）
+  // 則維持原本的 completion 結果卡片，不另外顯示提示，避免重複。
+  const showCompletedNotice = workflowCompleted && status === "idle";
+
+  return (
+    <div className="ce-pipeline" data-testid="ce-pipeline" data-completed={workflowCompleted ? "true" : "false"}>
+      <div className="ce-pipeline-header">
+        <div className="ce-pipeline-title">CE Pipeline</div>
+        <label className="ce-pipeline-auto-export">
+          <input
+            type="checkbox"
+            data-testid="ce-pipeline-auto-export"
+            checked={autoExport}
+            onChange={(e) => setAutoExport(e.target.checked)}
+            disabled={isPipelineAutoStep(status)}
+          />
+          完成後自動匯出 CE Artifacts
+        </label>
+      </div>
+      <div className="aiwf-actions">
+        <button
+          className="btn btn-primary"
+          data-testid="ce-pipeline-run"
+          onClick={() => void startPipeline()}
+          disabled={isPipelineActive(status) || workflowCompleted}
+        >
+          {workflowCompleted ? "Pipeline 已完成" : "Run CE Pipeline"}
+        </button>
+        {isPipelineActive(status) && (
+          <button className="btn" data-testid="ce-pipeline-cancel" onClick={handleCancel}>
+            Cancel Pipeline
+          </button>
+        )}
+      </div>
+      {showCompletedNotice && (
+        <div className="ce-pipeline-completed-notice" data-testid="ce-pipeline-completed-notice">
+          <div className="ce-pipeline-confirm-title">此 Workflow 已完成（Review passed、已 commit、Compound 已記錄）。</div>
+          <div>下一步：保存 AI Workflow、匯出 CE Artifacts；若要重跑，請建立新任務或重設 Workflow。</div>
+        </div>
+      )}
+      {status !== "idle" && (
+        <div className={`ce-pipeline-status ce-pipeline-${status}`} data-testid="ce-pipeline-status" data-status={status}>
+          {CE_PIPELINE_STATUS_TEXT[status]}
+        </div>
+      )}
+      {log.length > 0 && (
+        <ul className="ce-pipeline-log" data-testid="ce-pipeline-log">
+          {log.map((item, i) => (
+            <li key={`${i}-${item.step}`} className={item.ok ? "ok" : "not-ok"}>
+              {item.ok ? "✅" : "⛔"} {item.step}：{item.detail}
+            </li>
+          ))}
+        </ul>
+      )}
+      {status === "waiting_work_confirmation" && workSummary && (
+        <div className="ce-pipeline-confirm" data-testid="ce-pipeline-work-summary">
+          <div className="ce-pipeline-confirm-title">即將開始 Work（會修改目標專案檔案）</div>
+          <div className="ce-pipeline-confirm-row">Plan（{workSummary.planStatus || "未設定"}）：{workSummary.planSummary || "(無摘要)"}</div>
+          <div className="ce-pipeline-confirm-row">Audit checklist：{workSummary.checklistDone}/{workSummary.checklistTotal}</div>
+          {workSummary.acceptanceCriteria.length > 0 && (
+            <ul className="ce-pipeline-confirm-list">
+              {workSummary.acceptanceCriteria.map((item) => <li key={item}>{item}</li>)}
+            </ul>
+          )}
+          <div className="aiwf-actions">
+            <button className="btn btn-primary" data-testid="ce-pipeline-confirm-work" onClick={() => void confirmWork()}>
+              確認開始 Work
+            </button>
+          </div>
+        </div>
+      )}
+      {status === "waiting_commit_confirmation" && commitSummary && (
+        <div className="ce-pipeline-confirm" data-testid="ce-pipeline-commit-summary">
+          <div className="ce-pipeline-confirm-title">Review 通過，確認後才會執行 git commit（不會 push）</div>
+          <label className="aiwf-field">
+            <span className="aiwf-field-label">建議 Commit message（可編輯）</span>
+            <textarea
+              className="aiwf-textarea"
+              data-testid="ce-pipeline-commit-message"
+              value={commitMessage}
+              onChange={(e) => setCommitMessage(e.target.value)}
+              rows={2}
+            />
+          </label>
+          {commitSummary.changedFiles.length > 0 && (
+            <ul className="ce-pipeline-confirm-list" data-testid="ce-pipeline-changed-files">
+              {commitSummary.changedFiles.map((f) => <li key={f}>{f}</li>)}
+            </ul>
+          )}
+          {commitSummary.diffStat && <pre className="ce-pipeline-pre">{commitSummary.diffStat}</pre>}
+          <pre className="ce-pipeline-pre" data-testid="ce-pipeline-verification-summary">{commitSummary.verificationSummary}</pre>
+          {unrelatedChanges.length > 0 && (
+            <div className="ce-pipeline-warning" data-testid="ce-pipeline-unrelated">
+              警告：target project 有 {unrelatedChanges.length} 個與本次 Work 無關的變更：{unrelatedChanges.join("、")}
+            </div>
+          )}
+          <div className="aiwf-actions">
+            <button
+              className="btn btn-primary"
+              data-testid="ce-pipeline-confirm-commit"
+              onClick={() => void confirmCommit()}
+              disabled={commitMessage.trim().length === 0}
+            >
+              確認並 Commit
+            </button>
+          </div>
+        </div>
+      )}
+      {status === "needs_fix" && (
+        <div className="ce-pipeline-needs-fix" data-testid="ce-pipeline-needs-fix">
+          <div>Review 建議修正：</div>
+          {recommendedFixes.length > 0 && (
+            <ul className="ce-pipeline-confirm-list">
+              {recommendedFixes.map((f) => <li key={f}>{f}</li>)}
+            </ul>
+          )}
+          <div>請使用下方「開始 CE Fix Work」修正後，再重新執行 Pipeline。</div>
+        </div>
+      )}
+      {status === "failed" && (
+        <div className="ce-pipeline-error" data-testid="ce-pipeline-error">
+          <div>{error}</div>
+          {errorPreview && <pre className="ce-pipeline-pre">{errorPreview}</pre>}
+        </div>
+      )}
+      {status === "completed" && (
+        <div className="ce-pipeline-completed" data-testid="ce-pipeline-completed">
+          {commitHash && <div data-testid="ce-pipeline-commit-hash">Commit hash：{commitHash}</div>}
+          {compoundDone && <div data-testid="ce-pipeline-compound">Compound Notes 已產生並保存</div>}
+          {exportedDir ? (
+            <div data-testid="ce-pipeline-export-result">已匯出：{exportedDir}</div>
+          ) : (
+            <button
+              className="btn"
+              data-testid="ce-pipeline-export"
+              onClick={() => { const wf = pendingWfRef.current; if (wf) void runExport(wf); }}
+            >
+              匯出 CE Artifacts
+            </button>
+          )}
+          <div className="ce-commit-next">下一步：確認 Compound 內容後可套用完成狀態 / 匯出</div>
+        </div>
+      )}
+    </div>
+  );
+}
+
 type Props = {
   task: Task;
   onSave: (aiWorkflow: AiEngineeringWorkflow | undefined) => void;
@@ -1205,6 +1630,16 @@ export function AiWorkflowSection({ task, onSave, aiCommand, onApplyCeReadonlyWo
   }
 
   /**
+   * Phase 78：CE Pipeline 每步成功後的持久化：保存完整 workflow 並同步 draft。
+   * pipeline 內部以 core merge 函式逐步累積 workflow（起點是最新 draft），
+   * 所以這裡直接以 wf 為準保存（等同使用者按「保存 AI Workflow」）。
+   */
+  function handlePipelinePersist(wf: AiEngineeringWorkflow) {
+    onSave(wf);
+    setDraft((prev) => applyFullWorkflowToDraft(prev, wf));
+  }
+
+  /**
    * Phase 77F：CE Commit checkpoint 成功回傳後的回填處理。
    * 1. 合併 commitMessage / commitHash / committedAt / committedFiles 進 workReview 並持久化（onSave）。
    * 2. 同步更新本機 draft，讓 Commit 進度 ✅ 與欄位即時反映。
@@ -1241,6 +1676,27 @@ export function AiWorkflowSection({ task, onSave, aiCommand, onApplyCeReadonlyWo
     setCompoundGenerated(true);
   }
 
+  // Phase 80：右側 summary panel 的精簡摘要（只顯示狀態與短資訊，不顯示超長 stdout / prompt / review notes）。
+  const summaryTask = effectiveTask();
+  const summaryWr = summaryTask.aiWorkflow?.workReview;
+  const summaryProjectPath = summaryTask.projectPath?.trim() || "—";
+  const summaryReview = isCeReviewPassed(summaryTask)
+    ? "passed"
+    : isCeReviewNeedsFix(summaryTask)
+      ? "needs_fix"
+      : "—";
+  const summaryCommitHash = summaryWr?.commitHash?.trim() ?? "";
+  const summaryCommit = summaryCommitHash || "—";
+  const summaryChangedCount = (summaryWr?.changedFiles ?? []).filter((f) => f.trim().length > 0).length;
+  const summaryChanged = summaryChangedCount > 0 ? `${summaryChangedCount} 個檔案` : "—";
+  const summaryCompoundObj = summaryTask.aiWorkflow?.compound;
+  const summaryCompound =
+    (summaryCompoundObj?.lessonLearned?.trim() ||
+      summaryCompoundObj?.compoundNotes?.trim() ||
+      summaryCompoundObj?.reusablePrompt?.trim())
+      ? "已記錄"
+      : "—";
+
   return (
     <div className="detail-section ai-workflow-section" data-testid="ai-workflow">
       <div className="detail-label">AI Workflow</div>
@@ -1249,9 +1705,48 @@ export function AiWorkflowSection({ task, onSave, aiCommand, onApplyCeReadonlyWo
         compound。所有欄位皆可留白。
       </div>
 
-      {/* Phase 69：以最新 draft 即時推導階段總覽（只讀取、不保存）。 */}
-      <AiWorkflowProgressPanel task={effectiveTask()} />
+      {/* Phase 79B：desktop 雙欄版面 — 左主流程、右 summary panel（進度總覽）；<1100px fallback 單欄。 */}
+      <div className="aiwf-layout" data-testid="aiwf-layout">
+        {/* summary panel：DOM 置前，desktop 經 grid 放到右側並 sticky；mobile（單欄）顯示在最上方。 */}
+        <aside className="aiwf-side" data-testid="aiwf-summary-panel">
+          {/* Phase 69：以最新 draft 即時推導階段總覽（只讀取、不保存）。 */}
+          <AiWorkflowProgressPanel task={effectiveTask()} />
+          {/* Phase 80：精簡摘要卡（只顯示狀態與短資訊；不顯示超長 stdout / prompt / review notes）。 */}
+          <div className="aiwf-summary-card" data-testid="aiwf-summary-card">
+            <div className="aiwf-summary-card-title">Summary</div>
+            <div className="aiwf-summary-row"><span className="aiwf-summary-key">Project</span><span className="aiwf-summary-val" data-testid="aiwf-summary-project">{summaryProjectPath}</span></div>
+            <div className="aiwf-summary-row"><span className="aiwf-summary-key">Review</span><span className="aiwf-summary-val" data-testid="aiwf-summary-review">{summaryReview}</span></div>
+            <div className="aiwf-summary-row"><span className="aiwf-summary-key">Commit</span><span className="aiwf-summary-val" data-testid="aiwf-summary-commit">{summaryCommit}</span></div>
+            <div className="aiwf-summary-row"><span className="aiwf-summary-key">Changed files</span><span className="aiwf-summary-val" data-testid="aiwf-summary-changed">{summaryChanged}</span></div>
+            <div className="aiwf-summary-row"><span className="aiwf-summary-key">Compound</span><span className="aiwf-summary-val" data-testid="aiwf-summary-compound">{summaryCompound}</span></div>
+          </div>
+        </aside>
 
+        <div className="aiwf-main">
+      {/* Phase 78：一鍵 CE Pipeline（自動串接各階段，Work 前 / Commit 前停下等人工確認；不 push）。 */}
+      <CePipelineRunner
+        task={effectiveTask()}
+        aiCommand={aiCommand}
+        onPersist={handlePipelinePersist}
+      />
+
+      {/* Phase 80：Save AI Workflow 主畫面常駐（完成狀態也可手動保存）。 */}
+      <div className="aiwf-actions aiwf-save-actions">
+        <button
+          className={`btn btn-primary${saved ? " copied" : ""}`}
+          data-testid="aiwf-save"
+          onClick={handleSave}
+        >
+          {saved ? "✓ 已保存 AI Workflow" : "保存 AI Workflow"}
+        </button>
+      </div>
+
+      {/* Phase 80：Advanced manual controls — 舊手動 CE 流程 / fallback，預設收合，不干擾主流程。 */}
+      <details className="aiwf-section-group" data-testid="aiwf-advanced">
+        <summary className="aiwf-section-group-summary" data-testid="aiwf-advanced-toggle">
+          Advanced manual controls（手動 CE 流程 / fallback）
+        </summary>
+        <div className="aiwf-section-group-body">
       {/* Phase 70：CE Readonly Workflow 一鍵執行（Brainstorm → Plan → Audit → 回填，停在 Work 前）。 */}
       <CeReadonlyWorkflowRunner
         task={task}
@@ -1286,7 +1781,15 @@ export function AiWorkflowSection({ task, onSave, aiCommand, onApplyCeReadonlyWo
         onApply={handleApplyCeCommit}
         onApplySmoke={handleApplyCeCommitSmoke}
       />
+        </div>
+      </details>
 
+      {/* Phase 80：Workflow details — Brainstorm / Plan / Audit / Work / Review / Compound 欄位，預設收合。 */}
+      <details className="aiwf-section-group" data-testid="aiwf-workflow-details">
+        <summary className="aiwf-section-group-summary" data-testid="aiwf-workflow-details-toggle">
+          Workflow details（Brainstorm / Plan / Audit / Work · Review / Compound 欄位）
+        </summary>
+        <div className="aiwf-section-group-body">
       <details className="aiwf-details">
         <summary className="aiwf-summary" data-testid="aiwf-toggle-brainstorm">
           A. Brainstorm
@@ -1591,16 +2094,10 @@ export function AiWorkflowSection({ task, onSave, aiCommand, onApplyCeReadonlyWo
           <CeArtifactExportRunner task={task} />
         </div>
       </details>
-
-      <div className="aiwf-actions">
-        <button
-          className={`btn btn-primary${saved ? " copied" : ""}`}
-          data-testid="aiwf-save"
-          onClick={handleSave}
-        >
-          {saved ? "✓ 已保存 AI Workflow" : "保存 AI Workflow"}
-        </button>
-      </div>
+        </div>
+      </details>
+        </div>{/* .aiwf-main */}
+      </div>{/* .aiwf-layout */}
     </div>
   );
 }
